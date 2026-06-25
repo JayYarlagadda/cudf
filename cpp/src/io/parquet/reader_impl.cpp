@@ -1149,4 +1149,20 @@ std::vector<parquet::FileMetaData> read_parquet_footers(
     .get_parquet_metadatas();
 }
 
+parquet_metadata::column_chunk_metadata columnchunk_metadata(
+  std::vector<parquet::FileMetaData>&& parquet_metadatas)
+{
+  // Do not use arrow schema when only reading the parquet footer metadata.
+  constexpr auto use_arrow_schema = false;
+
+  // Do not enable schema index mappings here. Those maps are only populated when reading a
+  // column projection from mismatched sources, but this API walks all leaf columns from the
+  // zeroth source schema. Identical schemas across sources use identity mapping instead.
+  constexpr auto has_cols_from_mismatched_srcs = false;
+
+  return aggregate_reader_metadata(
+           std::move(parquet_metadatas), use_arrow_schema, has_cols_from_mismatched_srcs)
+    .get_column_chunk_metadata();
+}
+
 }  // namespace cudf::io::parquet::detail

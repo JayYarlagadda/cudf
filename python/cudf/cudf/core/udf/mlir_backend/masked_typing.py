@@ -220,7 +220,6 @@ class MaskedScalarNullOp(AbstractTemplate):
         return None
 
 
-# --- Unary ops: ``<op> Masked`` -> ``Masked(result)`` ---
 # Resolve the underlying scalar op on the value type, wrap the result.
 class MaskedScalarUnaryOp(AbstractTemplate):
     def generic(self, args, kws):

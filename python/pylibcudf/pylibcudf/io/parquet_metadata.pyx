@@ -27,9 +27,6 @@ from pylibcudf.libcudf.io.parquet_schema cimport (
 )
 from pylibcudf.libcudf.utilities.span cimport host_span
 from pylibcudf.types cimport DataType
-from libc.stddef cimport size_t
-from libc.stdint cimport int64_t, uint8_t
-from cython.operator cimport dereference
 ctypedef const unique_ptr[datasource] const_unique_ptr_datasource
 
 

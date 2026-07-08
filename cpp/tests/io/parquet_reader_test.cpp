@@ -3021,6 +3021,91 @@ TEST_F(ParquetMetadataReaderTest, ColumnChunkMetadataFromFootersMultipleSources)
   }
 }
 
+TEST_F(ParquetMetadataReaderTest, ColumnChunkMetadataSingleSource)
+{
+  auto const num_rows = 1200;
+
+  auto ints   = random_values<int>(num_rows);
+  auto floats = random_values<float>(num_rows);
+  column_wrapper<int> int_col(ints.begin(), ints.end());
+  column_wrapper<float> float_col(floats.begin(), floats.end());
+
+  table_view expected({int_col, float_col});
+  auto const filepath = write_parquet_temp_file(
+    expected, "ColumnChunkMetadataSingleSource.parquet", {"int_col", "float_col"});
+  auto const source_info = cudf::io::source_info{filepath};
+
+  auto const metadata = read_parquet_metadata(source_info).columnchunk_metadata();
+  ASSERT_EQ(metadata.size(), 2);
+  EXPECT_EQ(metadata.at("int_col").size(), 1);
+  EXPECT_EQ(metadata.at("float_col").size(), 1);
+  EXPECT_GT(metadata.at("int_col")[0], 0);
+  EXPECT_GT(metadata.at("float_col")[0], 0);
+
+  auto datasources = cudf::io::make_datasources(source_info);
+  auto footers     = cudf::io::read_parquet_footers(datasources);
+  ASSERT_EQ(footers.size(), 1);
+  auto const footer_metadata = cudf::io::columnchunk_metadata(std::move(footers));
+  EXPECT_EQ(footer_metadata, metadata);
+}
+
+TEST_F(ParquetMetadataReaderTest, ColumnChunkMetadataWithNulls)
+{
+  auto const num_rows = 1200;
+
+  auto ints     = random_values<int>(num_rows);
+  auto floats   = random_values<float>(num_rows);
+  auto validity = cudf::test::iterators::null_at(0);
+  column_wrapper<int> int_col(ints.begin(), ints.end(), validity);
+  column_wrapper<float> float_col(floats.begin(), floats.end(), validity);
+
+  table_view expected({int_col, float_col});
+  auto const filepath = write_parquet_temp_file(
+    expected, "ColumnChunkMetadataWithNulls.parquet", {"int_col", "float_col"});
+  auto const source_info = cudf::io::source_info{filepath};
+
+  auto const metadata = read_parquet_metadata(source_info).columnchunk_metadata();
+  ASSERT_EQ(metadata.size(), 2);
+  EXPECT_EQ(metadata.at("int_col").size(), 1);
+  EXPECT_EQ(metadata.at("float_col").size(), 1);
+  EXPECT_GT(metadata.at("int_col")[0], 0);
+  EXPECT_GT(metadata.at("float_col")[0], 0);
+
+  auto datasources           = cudf::io::make_datasources(source_info);
+  auto footers               = cudf::io::read_parquet_footers(datasources);
+  auto const footer_metadata = cudf::io::columnchunk_metadata(std::move(footers));
+  EXPECT_EQ(footer_metadata, metadata);
+}
+
+TEST_F(ParquetMetadataReaderTest, ColumnChunkMetadataMismatchedSchemas)
+{
+  auto const id_a    = column_wrapper<int64_t>{1, 2, 3};
+  auto const price_a = column_wrapper<double>{10.0, 200.0, 30.0};
+  cudf::table_view const table_a{{id_a, price_a}};
+  auto const path_a =
+    write_parquet_temp_file(table_a, "ColumnChunkMetadataMismatchA.parquet", {"id", "price"});
+
+  auto const category_b = column_wrapper<cudf::string_view>{"x", "y", "z"};
+  auto const id_b       = column_wrapper<int64_t>{1000, 1001, 1002};
+  auto const price_b    = column_wrapper<double>{40.0, 500.0, 60.0};
+  cudf::table_view const table_b{{category_b, id_b, price_b}};
+  auto const path_b = write_parquet_temp_file(
+    table_b, "ColumnChunkMetadataMismatchB.parquet", {"category", "id", "price"});
+
+  auto const source_info = cudf::io::source_info{{path_a, path_b}};
+  EXPECT_THROW(read_parquet_metadata(source_info), cudf::logic_error);
+
+  auto footers_a =
+    cudf::io::read_parquet_footers(cudf::io::make_datasources(cudf::io::source_info{path_a}));
+  auto footers_b =
+    cudf::io::read_parquet_footers(cudf::io::make_datasources(cudf::io::source_info{path_b}));
+  std::vector<cudf::io::parquet::FileMetaData> footers;
+  footers.reserve(2);
+  footers.push_back(std::move(footers_a.front()));
+  footers.push_back(std::move(footers_b.front()));
+  EXPECT_THROW(cudf::io::columnchunk_metadata(std::move(footers)), cudf::logic_error);
+}
+
 TEST_F(ParquetMetadataReaderTest, ColumnChunkMetadataMultipleSources)
 {
   auto const num_rows = 1200;

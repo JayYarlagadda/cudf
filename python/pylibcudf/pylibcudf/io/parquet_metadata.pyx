@@ -635,6 +635,9 @@ cpdef dict columnchunk_metadata(list parquet_metadatas):
     cdef object metadata
     cdef size_t i
 
+    if not parquet_metadatas:
+        raise ValueError("parquet_metadatas must not be empty")
+
     for metadata in parquet_metadatas:
         if not isinstance(metadata, FileMetaData):
             raise TypeError(

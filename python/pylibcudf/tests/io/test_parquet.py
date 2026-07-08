@@ -508,6 +508,11 @@ def test_columnchunk_metadata_standalone_from_footers(
     assert all(size > 0 for size in got["b"])
 
 
+def test_columnchunk_metadata_empty_input() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        plc.io.parquet_metadata.columnchunk_metadata([])
+
+
 def test_file_metadata_wrappers_not_directly_constructible() -> None:
     with pytest.raises(
         ValueError, match="SortingColumn cannot be constructed directly"

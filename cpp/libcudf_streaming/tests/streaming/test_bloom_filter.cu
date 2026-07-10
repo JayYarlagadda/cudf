@@ -5,6 +5,7 @@
 
 #include <cudf_test/cudf_gtest.hpp>
 
+#include <cudf/reduction/bloom_filter.cuh>
 #include <cudf/utilities/default_stream.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
@@ -12,7 +13,6 @@
 
 #include <rmm/device_scalar.hpp>
 
-#include <cuco/bloom_filter_policies.cuh>
 #include <cuco/bloom_filter_ref.cuh>
 #include <cuco/extent.cuh>
 #include <cuco/hash_functions.cuh>
@@ -25,16 +25,7 @@
 
 namespace {
 
-using policy_type = cuco::parametric_filter_policy<cuco::identity_hash<std::uint64_t>,
-                                                   std::uint32_t,
-                                                   8,
-                                                   8,
-                                                   8,
-                                                   1,
-                                                   1,
-                                                   8,
-                                                   false,
-                                                   false>;
+using policy_type = cudf::arrow_filter_policy<cuco::identity_hash<std::uint64_t>>;
 
 __global__ void block_index_kernel(std::uint32_t upper_hash,
                                    std::size_t num_blocks,

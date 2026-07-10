@@ -18,7 +18,8 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #endif
-#include <cuco/bloom_filter_policies.cuh>
+#include <cudf/reduction/bloom_filter.cuh>
+
 #include <cuco/bloom_filter_ref.cuh>
 #include <cuco/hash_functions.cuh>
 #include <cuco/utility/cuda_thread_scope.cuh>
@@ -55,16 +56,7 @@ namespace cudf_streaming::detail {
 namespace {
 using KeyType = std::uint64_t;
 
-using BloomFilterPolicy  = cuco::parametric_filter_policy<cuco::identity_hash<KeyType>,
-                                                          std::uint32_t,
-                                                          8,
-                                                          8,
-                                                          8,
-                                                          1,
-                                                          1,
-                                                          8,
-                                                          false,
-                                                          false>;
+using BloomFilterPolicy  = cudf::arrow_filter_policy<cuco::identity_hash<KeyType>>;
 using BloomFilterRefType = cuco::bloom_filter_ref<KeyType,
                                                   cuco::extent<std::size_t>,
                                                   cuco::thread_scope_device,

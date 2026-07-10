@@ -23,8 +23,15 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+#include <cudf/utilities/pinned_memory.hpp>
 
 #include <cuda/iterator>
+#include <cuda/memory_resource>
+#include <cuda_runtime_api.h>
+
+#include <rmm/cuda_stream.hpp>
+#include <rmm/device_uvector.hpp>
 
 #include <src/io/parquet/parquet_gpu.hpp>
 #include <src/io/parquet/stats_filter_helpers.hpp>
@@ -34,10 +41,131 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 using ParquetDecompressionTest = DecompressionTest<ParquetReaderTest>;
+
+namespace {
+
+struct poisoning_pinned_memory_resource {
+  std::vector<void*> allocations;
+
+  ~poisoning_pinned_memory_resource()
+  {
+    for (auto ptr : allocations) {
+      if (ptr != nullptr) { (void)cudaFreeHost(ptr); }
+    }
+  }
+
+  void* allocate_sync(std::size_t bytes, std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT)
+  {
+    return allocate(cuda::stream_ref{cudaStream_t{nullptr}}, bytes, alignment);
+  }
+
+  void deallocate_sync(void* ptr,
+                       std::size_t bytes,
+                       std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept
+  {
+    deallocate(cuda::stream_ref{cudaStream_t{nullptr}}, ptr, bytes, alignment);
+  }
+
+  void* allocate([[maybe_unused]] cuda::stream_ref stream,
+                 std::size_t bytes,
+                 [[maybe_unused]] std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT)
+  {
+    if (bytes == 0) { return nullptr; }
+    void* ptr{};
+    CUDF_CUDA_TRY(cudaHostAlloc(&ptr, bytes, cudaHostAllocMapped));
+    allocations.push_back(ptr);
+    return ptr;
+  }
+
+  void deallocate([[maybe_unused]] cuda::stream_ref stream,
+                  void* ptr,
+                  std::size_t bytes,
+                  [[maybe_unused]] std::size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept
+  {
+    if (ptr != nullptr) { std::memset(ptr, 0xff, bytes); }
+  }
+
+  bool operator==(poisoning_pinned_memory_resource const& other) const noexcept
+  {
+    return this == &other;
+  }
+
+  bool operator!=(poisoning_pinned_memory_resource const& other) const noexcept
+  {
+    return !(*this == other);
+  }
+
+  friend void get_property(poisoning_pinned_memory_resource const&,
+                           cuda::mr::device_accessible) noexcept
+  {
+  }
+
+  friend void get_property(poisoning_pinned_memory_resource const&,
+                           cuda::mr::host_accessible) noexcept
+  {
+  }
+};
+
+static_assert(cuda::mr::resource_with<poisoning_pinned_memory_resource,
+                                      cuda::mr::device_accessible,
+                                      cuda::mr::host_accessible>);
+
+struct scoped_pinned_memory_settings {
+  rmm::host_device_async_resource_ref previous_mr;
+  std::size_t previous_alloc_threshold;
+
+  scoped_pinned_memory_settings(rmm::host_device_async_resource_ref mr, std::size_t threshold)
+    : previous_mr{cudf::set_pinned_memory_resource(mr)},
+      previous_alloc_threshold{cudf::get_allocate_host_as_pinned_threshold()}
+  {
+    cudf::set_allocate_host_as_pinned_threshold(threshold);
+  }
+
+  ~scoped_pinned_memory_settings()
+  {
+    cudf::set_allocate_host_as_pinned_threshold(previous_alloc_threshold);
+    cudf::set_pinned_memory_resource(previous_mr);
+  }
+};
+
+struct stats_caster_base_test : cudf::io::parquet::detail::stats_caster_base {
+  template <typename T>
+  using host_column = stats_caster_base::host_column<T>;
+};
+
+constexpr std::size_t blocking_buffer_size = 32 * 1024 * 1024;
+constexpr int blocking_iterations          = 128;
+
+struct stream_blocker {
+  rmm::cuda_stream blocking_stream;
+  cudaEvent_t event{};
+  rmm::device_uvector<char> blocking_buffer{blocking_buffer_size, blocking_stream};
+
+  explicit stream_blocker(rmm::cuda_stream_view blocked_stream)
+  {
+    for (int i = 0; i < blocking_iterations; ++i) {
+      CUDF_CUDA_TRY(cudaMemsetAsync(
+        blocking_buffer.data(), i, blocking_buffer.size(), blocking_stream.value()));
+    }
+
+    CUDF_CUDA_TRY(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+    CUDF_CUDA_TRY(cudaEventRecord(event, blocking_stream.value()));
+    CUDF_CUDA_TRY(cudaStreamWaitEvent(blocked_stream.value(), event, 0));
+  }
+
+  ~stream_blocker()
+  {
+    if (event != nullptr) { (void)cudaEventDestroy(event); }
+  }
+};
+
+}  // namespace
 
 TEST_F(ParquetReaderTest, UserBounds)
 {
@@ -1405,6 +1533,33 @@ TEST_F(ParquetReaderTest, FilterSimple)
   auto result = cudf::io::read_parquet(read_opts);
 
   CUDF_TEST_EXPECT_TABLES_EQUAL(*result.tbl, *expected);
+}
+
+TEST_F(ParquetReaderTest, StatsFilterPinnedHostColumnCopyLifetime)
+{
+  poisoning_pinned_memory_resource pinned_mr;
+  scoped_pinned_memory_settings pinned_settings{
+    rmm::host_device_async_resource_ref{pinned_mr}, std::numeric_limits<std::size_t>::max()};
+
+  rmm::cuda_stream stream;
+  stream_blocker blocker{stream};
+
+  constexpr cudf::size_type num_values = 1 << 20;
+  std::unique_ptr<cudf::column> result;
+  {
+    stats_caster_base_test::host_column<int32_t> host_col{num_values, stream};
+    ASSERT_TRUE(host_col.val.get_allocator().is_device_accessible());
+    std::iota(host_col.val.begin(), host_col.val.end(), int32_t{0});
+
+    result = host_col.to_device(cudf::data_type{cudf::type_id::INT32},
+                                stream,
+                                cudf::get_current_device_resource_ref());
+  }
+  stream.synchronize();
+
+  auto const expected = cudf::test::fixed_width_column_wrapper<int32_t>(
+    cuda::counting_iterator<int32_t>{0}, cuda::counting_iterator<int32_t>{num_values});
+  CUDF_TEST_EXPECT_COLUMNS_EQUAL(result->view(), expected);
 }
 
 auto create_parquet_with_stats(std::string const& filename)

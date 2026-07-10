@@ -26,12 +26,12 @@
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/pinned_memory.hpp>
 
+#include <rmm/cuda_stream.hpp>
+#include <rmm/device_uvector.hpp>
+
 #include <cuda/iterator>
 #include <cuda/memory_resource>
 #include <cuda_runtime_api.h>
-
-#include <rmm/cuda_stream.hpp>
-#include <rmm/device_uvector.hpp>
 
 #include <src/io/parquet/parquet_gpu.hpp>
 #include <src/io/parquet/stats_filter_helpers.hpp>
@@ -1538,8 +1538,8 @@ TEST_F(ParquetReaderTest, FilterSimple)
 TEST_F(ParquetReaderTest, StatsFilterPinnedHostColumnCopyLifetime)
 {
   poisoning_pinned_memory_resource pinned_mr;
-  scoped_pinned_memory_settings pinned_settings{
-    rmm::host_device_async_resource_ref{pinned_mr}, std::numeric_limits<std::size_t>::max()};
+  scoped_pinned_memory_settings pinned_settings{rmm::host_device_async_resource_ref{pinned_mr},
+                                                std::numeric_limits<std::size_t>::max()};
 
   rmm::cuda_stream stream;
   stream_blocker blocker{stream};
@@ -1551,9 +1551,8 @@ TEST_F(ParquetReaderTest, StatsFilterPinnedHostColumnCopyLifetime)
     ASSERT_TRUE(host_col.val.get_allocator().is_device_accessible());
     std::iota(host_col.val.begin(), host_col.val.end(), int32_t{0});
 
-    result = host_col.to_device(cudf::data_type{cudf::type_id::INT32},
-                                stream,
-                                cudf::get_current_device_resource_ref());
+    result = host_col.to_device(
+      cudf::data_type{cudf::type_id::INT32}, stream, cudf::get_current_device_resource_ref());
   }
   stream.synchronize();
 

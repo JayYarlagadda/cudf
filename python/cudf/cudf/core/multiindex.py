@@ -389,7 +389,11 @@ class MultiIndex(Index):
             levels = []
             codes = []
             for col in self._data.values():
-                code, cats = factorize(col)
+                # sort=True: pandas MultiIndexes built from per-row values
+                # (set_index/from_arrays/from_frame) always have sorted
+                # levels, so lazy materialization must sort too for
+                # positional operations (e.g. set_levels) to line up.
+                code, cats = factorize(col, sort=True)
                 codes.append(as_column(code.astype(np.dtype(np.int64))))
                 levels.append(cats)
             self._levels = levels

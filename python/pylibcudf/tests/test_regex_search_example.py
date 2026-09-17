@@ -101,8 +101,20 @@ def test_configure_gds(monkeypatch):
 
 def test_native_gds_fallback_is_rejected(monkeypatch):
     """Reject GDS mode when native GDS is unavailable."""
+    initialized = False
+
+    def initialize():
+        nonlocal initialized
+        initialized = True
+
+    def get(name):
+        assert initialized
+        return False
+
     cufile_driver = type(
-        "CuFileDriver", (), {"get": staticmethod(lambda name: False)}
+        "CuFileDriver",
+        (),
+        {"initialize": staticmethod(initialize), "get": staticmethod(get)},
     )
     kvikio = type("KvikIO", (), {"cufile_driver": cufile_driver})
     monkeypatch.setitem(sys.modules, "kvikio", kvikio)
@@ -114,8 +126,20 @@ def test_native_gds_fallback_is_rejected(monkeypatch):
 def test_native_gds_requires_fallback_to_be_disabled(monkeypatch):
     """Reject GDS mode while cuFile compatibility fallback is allowed."""
     settings = {"is_gds_available": True, "allow_compat_mode": True}
+    initialized = False
+
+    def initialize():
+        nonlocal initialized
+        initialized = True
+
+    def get(name):
+        assert initialized
+        return settings[name]
+
     cufile_driver = type(
-        "CuFileDriver", (), {"get": staticmethod(settings.__getitem__)}
+        "CuFileDriver",
+        (),
+        {"initialize": staticmethod(initialize), "get": staticmethod(get)},
     )
     kvikio = type("KvikIO", (), {"cufile_driver": cufile_driver})
     monkeypatch.setitem(sys.modules, "kvikio", kvikio)

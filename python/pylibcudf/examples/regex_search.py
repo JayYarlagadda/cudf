@@ -72,6 +72,7 @@ def _require_native_gds() -> None:
         raise RuntimeError(
             "native GDS validation requires the kvikio Python package"
         ) from exc
+    cufile_driver.initialize()
     if not cufile_driver.get("is_gds_available"):
         raise RuntimeError(
             "native GDS is unavailable; cuFile would use its internal "
@@ -143,7 +144,7 @@ def scan_lines(lines: Any, program: Any, plc: Any, stream: Any) -> Any:
 
 def count_matches(lines: Any, mask: Any, plc: Any, stream: Any) -> int:
     """Count selected rows without materializing the matching strings."""
-    selected = plc.stream_compaction.apply_boolean_mask(
+    selected = plc.stream_compaction.apply_retention_mask(
         plc.Table([], num_rows=lines.size()), mask, stream=stream
     )
     stream.synchronize()
